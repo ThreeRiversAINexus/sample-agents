@@ -1,8 +1,8 @@
 /* Adapted from https://github.com/CVxTz/LLM-Voice/blob/master/llm_voice/audio_recorder.vue */
 <template>
   <div>
-    <button class="record-button" @mousedown="startRecording">Begin listening</button>
-    <button class="record-button" @mousedown="stopRecording">Stop listening</button>
+    <button class="record-button" @click="startRecording">Begin listening</button>
+    <button class="record-button" @click="stopRecording">Stop listening</button>
     <audio ref="audioPlayer"></audio>
   </div>
 </template>
@@ -39,6 +39,7 @@ export default {
     },
     async startRecording() {
       try {
+        console.log('startRecording');
         if (!this.stream) {
           await this.requestMicrophonePermission();
         }
@@ -56,6 +57,7 @@ export default {
       }
     },
     stopRecording() {
+      console.log('stopRecording');
       if (this.isRecording) {
         this.mediaRecorder.addEventListener('stop', () => {
           this.isRecording = false;

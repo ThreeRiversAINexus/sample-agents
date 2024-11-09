@@ -11,6 +11,7 @@ load_dotenv()
 from typing import Callable, Optional
 
 from openai import OpenAI
+import os
 
 # Taken from https://github.com/CVxTz/LLM-Voice/blob/master/llm_voice/audio_recorder.py
 class AudioRecorder(Element, component="audio_recorder.vue"):
@@ -27,10 +28,17 @@ class AudioRecorder(Element, component="audio_recorder.vue"):
     async def play_recorded_audio(self) -> None:
         self.run_method("playRecordedAudio")
 
+OPENAI_API_KEY=os.getenv("RUNPOD_API_KEY")
+OPENAI_MODEL_NAME=os.getenv("MODEL_NAME")
+RUNPOD_ENDPOINT_ID=os.getenv("RUNPOD_ENDPOINT_ID")
+
 class AudioTranscriber:
     def __init__(self):
         self.whisper = None
-        self.openai = OpenAI()
+        self.openai = OpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url=f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
+        )
 
     async def transcribe(self, audio_blob):
         # Check size < 25 MB
@@ -52,17 +60,24 @@ class MyContextBuffer:
             return False
 
 class ImageGenerator:
-    def __init__(self):
+    def __init__(self, context):
         pass
+
+async def on_audio_ready(audio):
+    transcriber = AudioTranscriber()
+    print(f"Transcribing audio: {audio}")
+
+    transcription = await transcriber.transcribe(audio)
+    print(f"Transcription: {transcription}")
+    my_context_buffer = MyContextBuffer()
+    my_context_buffer.add_to_context(transcription)
 
 @ui.page("/")
 async def main():
     ui.label("Hello World")
-    transcriber = AudioTranscriber()
-    my_context_buffer = MyContextBuffer()
-    image_generator = ImageGenerator(context=my_context_buffer)
+    # image_generator = ImageGenerator(context=my_context_buffer)
 
-    listener = AudioRecorder(on_audio_ready=lambda audio: my_context_buffer.add_to_context(transcriber.transcribe(audio)))
+    listener = AudioRecorder(on_audio_ready=on_audio_ready)
 
 ui.run(port=8080)
 
