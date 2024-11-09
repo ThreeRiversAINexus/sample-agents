@@ -2,21 +2,32 @@ FROM python:3.11
 
 WORKDIR /app
 
-COPY requirements.txt requirements.txt
-COPY main.py main.py
+# Install system dependencies including ffmpeg for pydub
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install LangChain and its components
-RUN apt-get update
+# Copy application files
+COPY requirements.txt requirements.txt
+# COPY main.py main.py
+# COPY ds/ ds/
+
+# Install Python dependencies
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# Define the directory that can be mounted from the host.
-# This is where the host's directory will be seen in the container.
+# Environment variables
+ENV OPENAI_API_KEY=""
+ENV RUNPOD_API_KEY=""
+ENV MODEL_NAME="sdxl"
+ENV RUNPOD_ENDPOINT_ID=""
+ENV RUNPOD_SDXL_ENDPOINT_ID=""
+
+# Define the directory that can be mounted from the host
 VOLUME ["/app"]
 
-# Instead of running app.py directly, start a bash shell to interact with.
-# This allows the developer to run app.py or any other commands manually.
-CMD ["/bin/bash"]
+# Expose the port the app runs on
+EXPOSE 8080
 
-# Build and Use:
-# Run ./build.sh then ./run.sh
+# Run the application
+CMD ["python", "main.py"]
