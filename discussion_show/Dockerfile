@@ -8,20 +8,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy application files
-COPY requirements.txt requirements.txt
+ COPY requirements.txt requirements.txt
 # COPY main.py main.py
 # COPY ds/ ds/
 
 # Install Python dependencies
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
-
-# Environment variables
-ENV OPENAI_API_KEY=""
-ENV RUNPOD_API_KEY=""
-ENV MODEL_NAME="sdxl"
-ENV RUNPOD_ENDPOINT_ID=""
-ENV RUNPOD_SDXL_ENDPOINT_ID=""
 
 # Define the directory that can be mounted from the host
 VOLUME ["/app"]

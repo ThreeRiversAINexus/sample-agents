@@ -32,7 +32,12 @@ export default {
   methods: {
     async requestMicrophonePermission() {
       try {
-        this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this.stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000
+          } 
+        });
       } catch (error) {
         console.error('Error accessing microphone:', error);
       }
@@ -44,7 +49,10 @@ export default {
           await this.requestMicrophonePermission();
         }
         this.audioChunks = [];
-        this.mediaRecorder = new MediaRecorder(this.stream);
+        // Use audio/webm MIME type for better compatibility
+        this.mediaRecorder = new MediaRecorder(this.stream, {
+          mimeType: 'audio/webm;codecs=opus'
+        });
         this.mediaRecorder.addEventListener('dataavailable', event => {
           if (event.data.size > 0) {
             this.audioChunks.push(event.data);
@@ -73,13 +81,19 @@ export default {
       this.$refs.audioPlayer.play();
     },
     saveBlob() {
-      this.audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+      // Use the same MIME type as MediaRecorder
+      this.audioBlob = new Blob(this.audioChunks, { 
+        type: 'audio/webm;codecs=opus' 
+      });
     },
     emitBlob() {
       const reader = new FileReader();
       reader.onload = () => {
         const base64Data = reader.result.split(',')[1]; // Extracting base64 data from the result
-        this.$emit('audio_ready', { audioBlobBase64: base64Data });
+        this.$emit('audio_ready', { 
+          audioBlobBase64: base64Data,
+          mimeType: 'audio/webm;codecs=opus'
+        });
       };
       reader.readAsDataURL(this.audioBlob);
     }

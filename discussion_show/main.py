@@ -1,4 +1,4 @@
-from nicegui import ui, run
+from nicegui import ui, run, app
 from nicegui.element import Element
 from ds.runpod_api import RunPodAPI
 from dotenv import load_dotenv
@@ -7,6 +7,7 @@ from openai import OpenAI
 import os
 import base64
 import tempfile
+import time
 from pydub import AudioSegment
 import io
 
@@ -33,11 +34,14 @@ RUNPOD_MODEL_NAME=os.getenv("MODEL_NAME")
 RUNPOD_ENDPOINT_ID=os.getenv("RUNPOD_ENDPOINT_ID")
 RUNPOD_SDXL_ENDPOINT_ID=os.getenv("RUNPOD_SDXL_ENDPOINT_ID")
 
+# Ensure images directory exists
+IMAGES_DIR = "static/images"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
 class AudioTranscriber:
     def __init__(self):
         self.openai = OpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url=f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
+            api_key=OPENAI_API_KEY
         )
 
     async def transcribe(self, audio_blob_base64):
@@ -45,30 +49,37 @@ class AudioTranscriber:
             # Decode base64 to binary
             audio_data = base64.b64decode(audio_blob_base64)
             
-            # Create WAV audio segment from binary data
-            audio = AudioSegment.from_wav(io.BytesIO(audio_data))
-            
-            # Convert to OGG format (reduces file size)
-            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
-                audio.export(temp_ogg.name, format='ogg', parameters=["-q:a", "4"])
+            # Save the WebM audio data to a temporary file
+            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
+                temp_webm.write(audio_data)
+                temp_webm.flush()
                 
-                # Check file size
-                file_size = os.path.getsize(temp_ogg.name)
-                if file_size > 25 * 1024 * 1024:  # 25 MB in bytes
+                # Convert WebM to WAV using pydub
+                audio = AudioSegment.from_file(temp_webm.name, format="webm")
+                
+                # Export as OGG for Whisper API
+                with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
+                    audio.export(temp_ogg.name, format='ogg', parameters=["-q:a", "4"])
+                    
+                    # Check file size
+                    file_size = os.path.getsize(temp_ogg.name)
+                    if file_size > 25 * 1024 * 1024:  # 25 MB in bytes
+                        os.unlink(temp_ogg.name)
+                        os.unlink(temp_webm.name)
+                        raise ValueError("Audio file too large (>25MB)")
+                    
+                    # Transcribe with Whisper API
+                    with open(temp_ogg.name, 'rb') as audio_file:
+                        transcript = self.openai.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file
+                        )
+                    
+                    # Clean up temp files
                     os.unlink(temp_ogg.name)
-                    raise ValueError("Audio file too large (>25MB)")
-                
-                # Transcribe with Whisper API
-                with open(temp_ogg.name, 'rb') as audio_file:
-                    transcript = self.openai.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file
-                    )
-                
-                # Clean up temp file
-                os.unlink(temp_ogg.name)
-                
-                return transcript.text
+                    os.unlink(temp_webm.name)
+                    
+                    return transcript.text
                 
         except Exception as e:
             print(f"Error in transcription: {e}")
@@ -77,7 +88,7 @@ class AudioTranscriber:
 class MyContextBuffer:
     def __init__(self):
         self.context = ""
-        self.full_enough = 250
+        self.full_enough = 50
         self.openai = OpenAI(api_key=OPENAI_API_KEY)
 
     def add_to_context(self, text):
@@ -126,15 +137,15 @@ class ImageGenerator:
                 return base64_image
         else:
             print("Failed to start the job.")
-        return "Failed"
+        return None
 
-async def on_audio_ready(data):
-    print("Audio data received")
-    base64_audio = data.args['audioBlobBase64']
+async def on_audio_ready(e):
+    base64_audio = e.args['audioBlobBase64']
     if not base64_audio:
         print("No audio data received")
         return
-
+    
+    print("Audio data received")
     transcriber = AudioTranscriber()
     print("Transcribing audio...")
     
@@ -154,15 +165,34 @@ async def on_audio_ready(data):
                 update_image(interactive_image, image_prompt)
                 context_buffer.clear()
 
+def save_base64_image(base64_data):
+    # Remove the data URL prefix if present
+    if ',' in base64_data:
+        base64_data = base64_data.split(',')[1]
+    
+    # Generate a unique filename
+    filename = f"generated_{int(time.time())}.png"
+    filepath = os.path.join(IMAGES_DIR, filename)
+    
+    # Decode and save the image
+    image_data = base64.b64decode(base64_data)
+    with open(filepath, 'wb') as f:
+        f.write(image_data)
+    
+    return f"/static/images/{filename}"
+
 def update_image(interactive_image, prompt):
     ig = ImageGenerator(endpoint_id=RUNPOD_SDXL_ENDPOINT_ID)
-    image = ig.generate_image(prompt)
-    if image == "Failed":
-        print("Failed to generate image")
+    base64_image = ig.generate_image(prompt)
+    
+    if base64_image:
+        # Save the image and get its URL
+        image_url = save_base64_image(base64_image)
+        print(f"Image saved at: {image_url}")
+        interactive_image.set_source(image_url)
+        # interactive_image.force_reload()
     else:
-        print("Successfully generated image")
-        interactive_image.set_source(image)
-        interactive_image.force_reload()
+        print("Failed to generate image")
 
 # Global variables for UI elements
 context_buffer = MyContextBuffer()
@@ -198,4 +228,7 @@ async def main():
     </style>
     ''')
 
-ui.run(host="0.0.0.0", port=8080)
+# Serve static files
+app.add_static_files("/static", IMAGES_DIR)
+
+ui.run(port=8080)
