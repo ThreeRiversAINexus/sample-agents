@@ -104,6 +104,9 @@ class MyContextBuffer:
     def is_full_enough(self):
         return len(self.context) > self.full_enough
 
+    def get_fill_percentage(self):
+        return min(100, int((len(self.context) / self.full_enough) * 100))
+
     async def generate_image_prompt(self):
         if not self.context:
             return None
@@ -249,6 +252,8 @@ async def update_image(interactive_image, prompt):
 context_buffer = MyContextBuffer()
 interactive_image = None
 transcription_display = None
+progress_bar = None
+progress_label = None
 
 async def on_audio_ready(e):
     base64_audio = e.args['audioBlobBase64']
@@ -265,6 +270,11 @@ async def on_audio_ready(e):
         print(f"Transcription: {transcription}")
         context_buffer.add_to_context(transcription)
         
+        # Update progress bar
+        percentage = context_buffer.get_fill_percentage()
+        progress_bar.set_value(percentage / 100)
+        progress_label.set_text(f"Context Buffer: {percentage}%")
+        
         # Update transcription display with trailing effect
         transcription_display.clear()
         with transcription_display:
@@ -276,10 +286,13 @@ async def on_audio_ready(e):
                 print(f"Generated image prompt: {image_prompt}")  # Debug print
                 await update_image(interactive_image, image_prompt)
                 context_buffer.clear()
+                # Reset progress bar after clearing context
+                progress_bar.set_value(0)
+                progress_label.set_text("Context Buffer: 0%")
 
 @ui.page("/")
 async def main():
-    global interactive_image, transcription_display, context_buffer
+    global interactive_image, transcription_display, progress_bar, progress_label, context_buffer
     
     with ui.column().classes('w-full items-center'):
         ui.label("AI Discussion Visualizer").classes('text-2xl mb-4')
@@ -287,6 +300,11 @@ async def main():
         # Audio controls
         with ui.row().classes('mb-4'):
             AudioRecorder(on_audio_ready=on_audio_ready)
+        
+        # Progress bar and label
+        with ui.column().classes('w-full max-w-2xl mb-4'):
+            progress_label = ui.label("Context Buffer: 0%").classes('text-sm mb-1')
+            progress_bar = ui.linear_progress(value=0).classes('w-full')
         
         # Transcription display area with fade-out animation
         transcription_display = ui.column().classes('w-full max-w-2xl mb-4 min-h-[100px]')
