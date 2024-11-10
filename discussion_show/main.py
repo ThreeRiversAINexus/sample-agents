@@ -17,6 +17,7 @@ from datetime import datetime
 import webrtcvad
 import wave
 import array
+import requests
 
 # Configure logging
 def setup_logger():
@@ -69,7 +70,10 @@ OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
 RUNPOD_API_KEY=os.getenv("RUNPOD_API_KEY")
 RUNPOD_MODEL_NAME=os.getenv("MODEL_NAME")
 RUNPOD_ENDPOINT_ID=os.getenv("RUNPOD_ENDPOINT_ID")
+RUNPOD_WHISPER_ENDPOINT_ID=os.getenv("RUNPOD_WHISPER_ENDPOINT_ID")
 RUNPOD_SDXL_ENDPOINT_ID=os.getenv("RUNPOD_SDXL_ENDPOINT_ID")
+WHISPER_PROVIDER=os.getenv("WHISPER_PROVIDER", "openai")  # Default to OpenAI if not set
+FULL_ENOUGH=500 # 2000 is also a good value
 
 # Get the absolute path for the images directory
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -79,27 +83,25 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 
 class AudioTranscriber:
     def __init__(self):
-        # self.openai = OpenAI(api_key=OPENAI_API_KEY)
-        self.endpoint_id = RUNPOD_ENDPOINT_ID
-        self.openai = OpenAI(
-            api_key=OPENAI_API_KEY,
-            # base_url=f"https://api.runpod.ai/v2/{self.endpoint_id}/openai/v1"
-        )
+        self.provider = WHISPER_PROVIDER
         self.logger = logging.getLogger('discussion_show.transcriber')
         self.vad = webrtcvad.Vad(3)  # Aggressiveness mode 3 (highest)
+        
+        if self.provider == "openai":
+            self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        else:  # runpod
+            self.endpoint_id = RUNPOD_WHISPER_ENDPOINT_ID
+            self.api_key = RUNPOD_API_KEY
 
     def check_voice_activity(self, wav_path):
         """Check if the WAV file contains voice activity."""
         with wave.open(wav_path, 'rb') as wf:
-            # WebRTC VAD only accepts 16-bit mono PCM audio
             if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
                 return False
             
-            # Get raw audio data
             raw_data = wf.readframes(wf.getnframes())
             samples = array.array('h', raw_data)
             
-            # Process in 30ms frames (WebRTC VAD requirement)
             frame_duration = 30  # ms
             samples_per_frame = int(wf.getframerate() * frame_duration / 1000)
             voice_frames = 0
@@ -117,87 +119,161 @@ class AudioTranscriber:
                 return False
                 
             voice_percentage = (voice_frames / total_frames) * 100
-            return voice_percentage > 10  # Consider it speech if more than 10% contains voice
+            return voice_percentage > 10
 
-    async def transcribe(self, audio_blob_base64):
-        def _process_audio():
-            try:
-                self.logger.info("Starting audio transcription process")
-                # Decode base64 to binary
-                audio_data = base64.b64decode(audio_blob_base64)
-                self.logger.debug("Successfully decoded base64 audio data")
+    async def transcribe_with_openai(self, audio_blob_base64):
+        """Transcribe audio using OpenAI's Whisper API"""
+        try:
+            self.logger.info("Starting OpenAI audio transcription process")
+            # Decode base64 to binary
+            audio_data = base64.b64decode(audio_blob_base64)
+            self.logger.debug("Successfully decoded base64 audio data")
+            
+            # Save the WebM audio data to a temporary file
+            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
+                temp_webm.write(audio_data)
+                temp_webm.flush()
+                self.logger.debug(f"Saved temporary WebM file: {temp_webm.name}")
                 
-                # Save the WebM audio data to a temporary file
-                with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
-                    temp_webm.write(audio_data)
-                    temp_webm.flush()
-                    self.logger.debug(f"Saved temporary WebM file: {temp_webm.name}")
+                # Convert WebM to WAV using pydub
+                audio = AudioSegment.from_file(temp_webm.name, format="webm")
+                self.logger.debug("Successfully converted WebM to AudioSegment")
+                
+                # Save as WAV for VAD check
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                    audio.export(temp_wav.name, format='wav', parameters=[
+                        "-acodec", "pcm_s16le",
+                        "-ac", "1",
+                        "-ar", "16000"
+                    ])
                     
-                    # Convert WebM to WAV using pydub
-                    audio = AudioSegment.from_file(temp_webm.name, format="webm")
-                    self.logger.debug("Successfully converted WebM to AudioSegment")
-                    
-                    # Save as WAV for VAD check
-                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-                        audio.export(temp_wav.name, format='wav', parameters=[
-                            "-acodec", "pcm_s16le",  # 16-bit PCM
-                            "-ac", "1",              # mono
-                            "-ar", "16000"           # 16kHz sample rate
-                        ])
-                        
-                        # Check for voice activity
-                        if not self.check_voice_activity(temp_wav.name):
-                            self.logger.info("No significant voice activity detected")
-                            os.unlink(temp_wav.name)
-                            os.unlink(temp_webm.name)
-                            return None
-                        
+                    if not self.check_voice_activity(temp_wav.name):
+                        self.logger.info("No significant voice activity detected")
                         os.unlink(temp_wav.name)
+                        os.unlink(temp_webm.name)
+                        return None
                     
-                    # Export as OGG for Whisper API
-                    with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
-                        audio.export(temp_ogg.name, format='ogg', parameters=["-q:a", "4"])
-                        
-                        # Check file size
-                        file_size = os.path.getsize(temp_ogg.name)
-                        if file_size > 25 * 1024 * 1024:  # 25 MB in bytes
-                            self.logger.error("Audio file too large (>25MB)")
-                            os.unlink(temp_ogg.name)
-                            os.unlink(temp_webm.name)
-                            raise ValueError("Audio file too large (>25MB)")
-                        
-                        self.logger.info("Sending audio to Whisper API for transcription")
-                        # Transcribe with Whisper API
-                        with open(temp_ogg.name, 'rb') as audio_file:
-                            transcript = self.openai.audio.transcriptions.create(
-                                model="whisper-1",
-                                file=audio_file
-                            )
-                        
-                        # Clean up temp files
+                    os.unlink(temp_wav.name)
+                
+                # Export as OGG for Whisper API
+                with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
+                    audio.export(temp_ogg.name, format='ogg', parameters=["-q:a", "4"])
+                    
+                    file_size = os.path.getsize(temp_ogg.name)
+                    if file_size > 25 * 1024 * 1024:
+                        self.logger.error("Audio file too large (>25MB)")
                         os.unlink(temp_ogg.name)
                         os.unlink(temp_webm.name)
-                        self.logger.debug("Cleaned up temporary files")
-                        
-                        self.logger.info("Successfully transcribed audio")
-                        return transcript.text
+                        raise ValueError("Audio file too large (>25MB)")
                     
-            except Exception as e:
-                self.logger.error(f"Error in transcription: {str(e)}", exc_info=True)
-                return None
+                    self.logger.info("Sending audio to OpenAI Whisper API")
+                    with open(temp_ogg.name, 'rb') as audio_file:
+                        transcript = self.openai.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file
+                        )
+                    
+                    # Clean up temp files
+                    os.unlink(temp_ogg.name)
+                    os.unlink(temp_webm.name)
+                    self.logger.debug("Cleaned up temporary files")
+                    
+                    self.logger.info("Successfully transcribed audio")
+                    return transcript.text
+                
+        except Exception as e:
+            self.logger.error(f"Error in OpenAI transcription: {str(e)}", exc_info=True)
+            return None
 
-        return await run.io_bound(_process_audio)
+    async def transcribe_with_runpod(self, audio_blob_base64):
+        """Transcribe audio using RunPod's Whisper endpoint"""
+        try:
+            self.logger.info("Starting RunPod audio transcription process")
+            
+            # Check for voice activity using WAV conversion first
+            audio_data = base64.b64decode(audio_blob_base64)
+            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
+                temp_webm.write(audio_data)
+                temp_webm.flush()
+                
+                audio = AudioSegment.from_file(temp_webm.name, format="webm")
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                    audio.export(temp_wav.name, format='wav', parameters=[
+                        "-acodec", "pcm_s16le",
+                        "-ac", "1",
+                        "-ar", "16000"
+                    ])
+                    
+                    if not self.check_voice_activity(temp_wav.name):
+                        self.logger.info("No significant voice activity detected")
+                        os.unlink(temp_wav.name)
+                        os.unlink(temp_webm.name)
+                        return None
+                    
+                    os.unlink(temp_wav.name)
+                os.unlink(temp_webm.name)
+
+            # Send base64 audio directly to RunPod
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "input": {
+                    "audio_base64": audio_blob_base64,
+                    "model": "base",
+                    "transcription": "plain_text",
+                    "translate": False,
+                    "language": None,
+                    "temperature": 0,
+                    "best_of": 5,
+                    "beam_size": 5,
+                    "enable_vad": True
+                }
+            }
+            
+            url = f"https://api.runpod.ai/v2/{self.endpoint_id}/runsync"
+            self.logger.info("Sending audio to RunPod Whisper API")
+            
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            
+            if result and "output" in result:
+                transcript = result["output"].get("transcription")
+                if transcript:
+                    self.logger.info("Successfully transcribed audio with RunPod")
+                    return transcript
+            
+            self.logger.error("No transcript in RunPod response")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error in RunPod transcription: {str(e)}", exc_info=True)
+            return None
+
+    async def transcribe(self, audio_blob_base64):
+        """Transcribe audio using the configured provider"""
+        if self.provider == "openai":
+            return await self.transcribe_with_openai(audio_blob_base64)
+        else:  # runpod
+            return await self.transcribe_with_runpod(audio_blob_base64)
 
 class MyContextBuffer:
     def __init__(self):
         self.context = ""
-        self.full_enough = 2000 
-        # self.openai = OpenAI(api_key=OPENAI_API_KEY)
-        self.openai = OpenAI(
-            api_key=RUNPOD_API_KEY,
-            base_url=f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
-        )
+        self.full_enough = FULL_ENOUGH
+        self.provider = WHISPER_PROVIDER
         self.logger = logging.getLogger('discussion_show.context_buffer')
+
+        if self.provider == "openai":
+            self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        else:  # runpod
+            self.openai = OpenAI(
+                api_key=RUNPOD_API_KEY,
+                base_url=f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
+            )
 
     def add_to_context(self, text):
         if text:
