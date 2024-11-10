@@ -215,7 +215,7 @@ class MyContextBuffer:
             response = self.openai.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions, but keep descriptions under 50 words. Avoid complex details and long descriptions."},
+                    {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions."},
                     {"role": "user", "content": f"Generate a short, focused image prompt based on this conversation excerpt: {self.context}"}
                 ]
             )
