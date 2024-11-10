@@ -73,7 +73,8 @@ RUNPOD_ENDPOINT_ID=os.getenv("RUNPOD_ENDPOINT_ID")
 RUNPOD_WHISPER_ENDPOINT_ID=os.getenv("RUNPOD_WHISPER_ENDPOINT_ID")
 RUNPOD_SDXL_ENDPOINT_ID=os.getenv("RUNPOD_SDXL_ENDPOINT_ID")
 WHISPER_PROVIDER=os.getenv("WHISPER_PROVIDER", "openai")  # Default to OpenAI if not set
-FULL_ENOUGH=500 # 2000 is also a good value
+# FULL_ENOUGH=500 # 2000 is also a good value
+FULL_ENOUGH=1000
 
 # Get the absolute path for the images directory
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -297,11 +298,13 @@ class MyContextBuffer:
         
         def _generate_prompt():
             self.logger.info("Generating image prompt from context")
+            context = self.context
+            self.clear()
             response = self.openai.chat.completions.create(
                 model=RUNPOD_MODEL_NAME,
                 messages=[
                     {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions. Create realistic and accurate art."},
-                    {"role": "user", "content": f"Generate an image prompt based on this conversation excerpt: {self.context}"}
+                    {"role": "user", "content": f"Generate an image prompt based on this conversation excerpt: {context}"}
                 ]
             )
             prompt = response.choices[0].message.content
@@ -407,7 +410,7 @@ async def on_audio_ready(e):
         if context_buffer.is_full_enough():
             logger.info("Context buffer full, generating image")
             image_prompt = await context_buffer.generate_image_prompt()
-            context_buffer.clear()
+            # context_buffer.clear()
             if image_prompt:
                 logger.debug(f"Generated image prompt: {image_prompt}")
                 await update_image(interactive_image, image_prompt)
