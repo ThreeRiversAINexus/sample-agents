@@ -215,8 +215,8 @@ class MyContextBuffer:
             response = self.openai.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a creative assistant that generates detailed image prompts based on conversations. Focus on the key themes, emotions, and visual elements that would make an interesting image."},
-                    {"role": "user", "content": f"Generate a detailed image prompt based on this conversation excerpt: {self.context}"}
+                    {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions, but keep descriptions under 50 words. Avoid complex details and long descriptions."},
+                    {"role": "user", "content": f"Generate a short, focused image prompt based on this conversation excerpt: {self.context}"}
                 ]
             )
             prompt = response.choices[0].message.content
@@ -238,6 +238,14 @@ class ImageGenerator:
         self.api_key = os.environ.get("RUNPOD_API_KEY")
         self.logger = logging.getLogger('discussion_show.image_generator')
 
+    def truncate_prompt(self, prompt, max_words=30):
+        """Truncate prompt to avoid CLIP token limit issues."""
+        words = prompt.split()
+        if len(words) > max_words:
+            self.logger.info(f"Truncating prompt from {len(words)} to {max_words} words")
+            return ' '.join(words[:max_words])
+        return prompt
+
     async def generate_image(self, context):
         def _start_job():
             self.logger.info("Starting RunPod image generation job")
@@ -246,17 +254,27 @@ class ImageGenerator:
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self.api_key}'
             }
+
+            # Truncate prompt to avoid token limit issues
+            truncated_prompt = self.truncate_prompt(context)
+            self.logger.debug(f"Using truncated prompt: {truncated_prompt}")
+
             data = {
                 "input": {
-                    "prompt": context,
+                    "prompt": truncated_prompt,
                     "negative_prompt": "blurry, bad quality, distorted",
-                    "num_inference_steps": 30,
-                    "guidance_scale": 7.5,
-                    "width": 1024,
-                    "height": 1024,
+                    "num_inference_steps": int(30),
+                    "guidance_scale": float(7.5),
+                    "width": int(1024),
+                    "height": int(1024),
                     "seed": int(time.time()),
-                    "num_images": 1,
-                    "scheduler": "DDIM"
+                    "num_images": int(1),
+                    "scheduler": "DDIM",
+                    "use_fp16": True,               # Enable half-precision
+                    "clip_skip": int(2),            # Add clip skip parameter
+                    "prompt_strength": float(0.8),  # Add prompt strength
+                    "torch_dtype": "float16",       # Explicitly set dtype
+                    "output_format": "png"
                 }
             }
             import requests

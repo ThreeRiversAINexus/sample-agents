@@ -7,3 +7,4 @@ nicegui
 openai
 pydub
 requests
+webrtcvad
