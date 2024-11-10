@@ -79,7 +79,12 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 
 class AudioTranscriber:
     def __init__(self):
-        self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        # self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        self.endpoint_id = RUNPOD_ENDPOINT_ID
+        self.openai = OpenAI(
+            api_key=OPENAI_API_KEY,
+            # base_url=f"https://api.runpod.ai/v2/{self.endpoint_id}/openai/v1"
+        )
         self.logger = logging.getLogger('discussion_show.transcriber')
         self.vad = webrtcvad.Vad(3)  # Aggressiveness mode 3 (highest)
 
@@ -186,8 +191,12 @@ class AudioTranscriber:
 class MyContextBuffer:
     def __init__(self):
         self.context = ""
-        self.full_enough = 1000 
-        self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        self.full_enough = 2000 
+        # self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        self.openai = OpenAI(
+            api_key=RUNPOD_API_KEY,
+            base_url=f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1"
+        )
         self.logger = logging.getLogger('discussion_show.context_buffer')
 
     def add_to_context(self, text):
@@ -213,7 +222,7 @@ class MyContextBuffer:
         def _generate_prompt():
             self.logger.info("Generating image prompt from context")
             response = self.openai.chat.completions.create(
-                model="gpt-4",
+                model=RUNPOD_MODEL_NAME,
                 messages=[
                     {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions. Create realistic and accurate art."},
                     {"role": "user", "content": f"Generate an image prompt based on this conversation excerpt: {self.context}"}
@@ -322,10 +331,10 @@ async def on_audio_ready(e):
         if context_buffer.is_full_enough():
             logger.info("Context buffer full, generating image")
             image_prompt = await context_buffer.generate_image_prompt()
+            context_buffer.clear()
             if image_prompt:
                 logger.debug(f"Generated image prompt: {image_prompt}")
                 await update_image(interactive_image, image_prompt)
-                context_buffer.clear()
                 # Reset progress bar after clearing context
                 progress_bar.set_value(0)
                 progress_label.set_text("Context Buffer: 0%")
