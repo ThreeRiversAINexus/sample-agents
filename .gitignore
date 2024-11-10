@@ -3,3 +3,4 @@ event_searcher/.env
 *.pkl
 .devcontainer/
 .github/
+discussion_show/static/images/*

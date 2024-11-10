@@ -4,7 +4,8 @@ import os
 # Simply add OPENAI_API_KEY=... to .env
 # Then launch with `python structured_chat.py`
 
-load_dotenv()
+load_dotenv(dotenv_path="./.env")
+RUNPOD_ENDPOINT_ID = os.environ.get("RUNPOD_ENDPOINT_ID")
 
 from langchain.agents import AgentExecutor, create_structured_chat_agent
 from langchain_openai import ChatOpenAI
@@ -77,16 +78,15 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-1106")
+llm = ChatOpenAI(temperature=0, model=os.environ.get("MODEL_NAME"), api_key=os.environ.get("RUNPOD_API_KEY"), base_url=f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/openai/v1")
 
 agent = create_structured_chat_agent(llm, tools, prompt)
-
 memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
 agent_executor = AgentExecutor(
     agent=agent,
     tools=tools,
-    # verbose=True,
+    verbose=True,
     handle_parsing_errors=True,
     memory=memory,
     max_iterations=100,
