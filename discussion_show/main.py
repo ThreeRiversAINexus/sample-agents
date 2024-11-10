@@ -8,7 +8,7 @@ import os
 import base64
 import tempfile
 import time
-from pydub import AudioSegment
+from pydub import AudioSegment, silence
 import io
 import asyncio
 import logging
@@ -366,6 +366,16 @@ interactive_image = None
 transcription_display = None
 progress_bar = None
 progress_label = None
+audio_recorder = None
+
+async def handle_recording_toggle(e):
+    logger = logging.getLogger('discussion_show.recording_toggle')
+    if e.value:  # Switch turned on
+        logger.info("Starting recording")
+        await audio_recorder.start_recording()
+    else:  # Switch turned off
+        logger.info("Stopping recording")
+        await audio_recorder.stop_recording()
 
 async def on_audio_ready(e):
     logger = logging.getLogger('discussion_show.audio_handler')
@@ -406,16 +416,20 @@ async def on_audio_ready(e):
 
 @ui.page("/")
 async def main():
-    global interactive_image, transcription_display, progress_bar, progress_label, context_buffer
+    global interactive_image, transcription_display, progress_bar, progress_label, context_buffer, audio_recorder
     logger = logging.getLogger('discussion_show.ui')
     logger.info("Initializing main UI page")
     
     with ui.column().classes('w-full items-center'):
         ui.label("AI Discussion Visualizer").classes('text-2xl mb-4')
         
-        # Audio controls
-        with ui.row().classes('mb-4'):
-            AudioRecorder(on_audio_ready=on_audio_ready)
+        # Audio controls row with switch and recorder
+        with ui.row().classes('mb-4 items-center gap-4'):
+            # Add recording switch with label
+            with ui.row().classes('items-center gap-2'):
+                ui.switch('Record', on_change=handle_recording_toggle).classes('text-lg')
+            # Add recorder component
+            audio_recorder = AudioRecorder(on_audio_ready=on_audio_ready)
         
         # Progress bar and label
         with ui.column().classes('w-full max-w-2xl mb-4'):
@@ -423,7 +437,7 @@ async def main():
             progress_bar = ui.linear_progress(value=0).classes('w-full')
         
         # Transcription display area with fade-out animation
-        transcription_display = ui.column().classes('w-full max-w-2xl mb-4 min-h-[100px]')
+        transcription_display = ui.column().classes('w-full max-w-2xl mb-4 min-h-[100px] p-4 bg-gray-100 rounded')
         
         # Image display
         interactive_image = ui.interactive_image().classes('w-full max-w-2xl')
