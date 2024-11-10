@@ -11,6 +11,39 @@ import time
 from pydub import AudioSegment
 import io
 import asyncio
+import logging
+import sys
+from datetime import datetime
+
+# Configure logging
+def setup_logger():
+    logger = logging.getLogger('discussion_show')
+    logger.setLevel(logging.INFO)
+    
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(name)-12s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(detailed_formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = logging.FileHandler(
+        os.path.join(log_dir, f'discussion_show_{datetime.now().strftime("%Y%m%d")}.log')
+    )
+    file_handler.setFormatter(detailed_formatter)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+# Initialize logger
+logger = setup_logger()
 
 load_dotenv()
 
@@ -43,23 +76,26 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 
 class AudioTranscriber:
     def __init__(self):
-        self.openai = OpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        self.logger = logging.getLogger('discussion_show.transcriber')
 
     async def transcribe(self, audio_blob_base64):
         def _process_audio():
             try:
+                self.logger.info("Starting audio transcription process")
                 # Decode base64 to binary
                 audio_data = base64.b64decode(audio_blob_base64)
+                self.logger.debug("Successfully decoded base64 audio data")
                 
                 # Save the WebM audio data to a temporary file
                 with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
                     temp_webm.write(audio_data)
                     temp_webm.flush()
+                    self.logger.debug(f"Saved temporary WebM file: {temp_webm.name}")
                     
                     # Convert WebM to WAV using pydub
                     audio = AudioSegment.from_file(temp_webm.name, format="webm")
+                    self.logger.debug("Successfully converted WebM to AudioSegment")
                     
                     # Export as OGG for Whisper API
                     with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
@@ -68,10 +104,12 @@ class AudioTranscriber:
                         # Check file size
                         file_size = os.path.getsize(temp_ogg.name)
                         if file_size > 25 * 1024 * 1024:  # 25 MB in bytes
+                            self.logger.error("Audio file too large (>25MB)")
                             os.unlink(temp_ogg.name)
                             os.unlink(temp_webm.name)
                             raise ValueError("Audio file too large (>25MB)")
                         
+                        self.logger.info("Sending audio to Whisper API for transcription")
                         # Transcribe with Whisper API
                         with open(temp_ogg.name, 'rb') as audio_file:
                             transcript = self.openai.audio.transcriptions.create(
@@ -82,11 +120,13 @@ class AudioTranscriber:
                         # Clean up temp files
                         os.unlink(temp_ogg.name)
                         os.unlink(temp_webm.name)
+                        self.logger.debug("Cleaned up temporary files")
                         
+                        self.logger.info("Successfully transcribed audio")
                         return transcript.text
                     
             except Exception as e:
-                print(f"Error in transcription: {e}")
+                self.logger.error(f"Error in transcription: {str(e)}", exc_info=True)
                 return None
 
         return await run.io_bound(_process_audio)
@@ -96,22 +136,30 @@ class MyContextBuffer:
         self.context = ""
         self.full_enough = 50
         self.openai = OpenAI(api_key=OPENAI_API_KEY)
+        self.logger = logging.getLogger('discussion_show.context_buffer')
 
     def add_to_context(self, text):
         if text:
             self.context += f" {text.strip()}"
+            self.logger.debug(f"Added text to context. Current length: {len(self.context)}")
 
     def is_full_enough(self):
-        return len(self.context) > self.full_enough
+        is_full = len(self.context) > self.full_enough
+        self.logger.debug(f"Context buffer fullness check: {is_full}")
+        return is_full
 
     def get_fill_percentage(self):
-        return min(100, int((len(self.context) / self.full_enough) * 100))
+        percentage = min(100, int((len(self.context) / self.full_enough) * 100))
+        self.logger.debug(f"Context buffer fill percentage: {percentage}%")
+        return percentage
 
     async def generate_image_prompt(self):
         if not self.context:
+            self.logger.warning("Attempted to generate image prompt with empty context")
             return None
         
         def _generate_prompt():
+            self.logger.info("Generating image prompt from context")
             response = self.openai.chat.completions.create(
                 model="gpt-4",
                 messages=[
@@ -119,12 +167,15 @@ class MyContextBuffer:
                     {"role": "user", "content": f"Generate a detailed image prompt based on this conversation excerpt: {self.context}"}
                 ]
             )
-            return response.choices[0].message.content
+            prompt = response.choices[0].message.content
+            self.logger.info(f"Generated image prompt: {prompt}")
+            return prompt
             
         return await run.io_bound(_generate_prompt)
 
     def clear(self):
         self.context = ""
+        self.logger.debug("Context buffer cleared")
 
 class ImageGenerator:
     def __init__(self, endpoint_id=None):
@@ -133,15 +184,16 @@ class ImageGenerator:
         else:
             self.endpoint_id = endpoint_id
         self.api_key = os.environ.get("RUNPOD_API_KEY")
+        self.logger = logging.getLogger('discussion_show.image_generator')
 
     async def generate_image(self, context):
         def _start_job():
+            self.logger.info("Starting RunPod image generation job")
             url = f"https://api.runpod.ai/v2/{self.endpoint_id}/run"
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {self.api_key}'
             }
-            # Format input according to SDXL requirements
             data = {
                 "input": {
                     "prompt": context,
@@ -157,7 +209,9 @@ class ImageGenerator:
             }
             import requests
             response = requests.post(url, headers=headers, json=data)
-            return response.json()
+            result = response.json()
+            self.logger.debug(f"RunPod job start response: {result}")
+            return result
 
         def _check_status(job_id):
             url = f"https://api.runpod.ai/v2/{self.endpoint_id}/status/{job_id}"
@@ -167,49 +221,51 @@ class ImageGenerator:
             }
             import requests
             response = requests.get(url, headers=headers)
-            return response.json()
+            result = response.json()
+            self.logger.debug(f"RunPod job status: {result.get('status')}")
+            return result
 
         start_response = await run.io_bound(_start_job)
-        print(f"RunPod start response: {start_response}")  # Debug print
         job_status_id = start_response.get("id")
 
         if not job_status_id:
-            print("Failed to start the job.")
+            self.logger.error("Failed to start RunPod job")
             return None
 
         while True:
             status_response = await run.io_bound(lambda: _check_status(job_status_id))
-            print(f"RunPod status response: {status_response}")  # Debug print
             if status_response.get("status") in ["COMPLETED", "FAILED", "CANCELLED"]:
                 break
             await asyncio.sleep(1)
 
         if status_response.get("status") == "COMPLETED":
             try:
-                # Handle both possible output formats
                 output = status_response.get("output", {})
                 if isinstance(output, list) and output:
-                    base64_image = output[0]  # Get first image if list
+                    base64_image = output[0]
                 elif isinstance(output, dict):
                     base64_image = output.get("image") or output.get("image_url")
                 else:
                     base64_image = output
                 
                 if base64_image:
-                    print("Successfully extracted base64 image")
+                    self.logger.info("Successfully generated image")
                     return base64_image
                 else:
-                    print(f"No image in output: {output}")
+                    self.logger.error(f"No image in output: {output}")
                     return None
             except (KeyError, TypeError) as e:
-                print(f"Error extracting image: {e}")
+                self.logger.error(f"Error extracting image: {str(e)}", exc_info=True)
                 return None
         else:
-            print(f"Job failed with status: {status_response.get('status')}")
+            self.logger.error(f"Job failed with status: {status_response.get('status')}")
             return None
 
 async def save_base64_image(base64_data):
+    logger = logging.getLogger('discussion_show.image_saver')
+    
     def _save_image():
+        logger.info("Starting image save process")
         # Remove the data URL prefix if present
         if ',' in base64_data:
             base64_data_clean = base64_data.split(',')[1]
@@ -219,34 +275,38 @@ async def save_base64_image(base64_data):
         # Generate a unique filename
         filename = f"generated_{int(time.time())}.png"
         filepath = os.path.join(IMAGES_DIR, filename)
+        logger.debug(f"Saving image to: {filepath}")
         
         # Decode and save the image
         image_data = base64.b64decode(base64_data_clean)
         with open(filepath, 'wb') as f:
             f.write(image_data)
-            f.flush()  # Ensure the file is written to disk
-            os.fsync(f.fileno())  # Force the OS to write the file to disk
+            f.flush()
+            os.fsync(f.fileno())
         
+        logger.info(f"Successfully saved image: {filename}")
         return f"/static/images/{filename}"
 
-    # Save the image and wait a moment to ensure it's written to disk
     image_url = await run.io_bound(_save_image)
-    await asyncio.sleep(0.5)  # Small delay to ensure file is available
+    await asyncio.sleep(0.5)
     return image_url
 
 async def update_image(interactive_image, prompt):
+    logger = logging.getLogger('discussion_show.image_updater')
+    
     ig = ImageGenerator(endpoint_id=RUNPOD_SDXL_ENDPOINT_ID)
+    logger.info("Generating new image")
     base64_image = await ig.generate_image(prompt)
     
     if base64_image:
-        # Save the image and get its URL
+        logger.info("Saving generated image")
         image_url = await save_base64_image(base64_image)
-        print(f"Image saved at: {image_url}")
-        # Add a small delay before updating the UI
+        logger.debug(f"Image saved at: {image_url}")
         await asyncio.sleep(0.5)
         interactive_image.set_source(image_url)
+        logger.info("Successfully updated image in UI")
     else:
-        print("Failed to generate image")
+        logger.error("Failed to generate image")
 
 # Global variables for UI elements
 context_buffer = MyContextBuffer()
@@ -256,18 +316,19 @@ progress_bar = None
 progress_label = None
 
 async def on_audio_ready(e):
+    logger = logging.getLogger('discussion_show.audio_handler')
+    
     base64_audio = e.args['audioBlobBase64']
     if not base64_audio:
-        print("No audio data received")
+        logger.warning("No audio data received")
         return
     
-    print("Audio data received")
+    logger.info("Audio data received, starting transcription")
     transcriber = AudioTranscriber()
-    print("Transcribing audio...")
     
     transcription = await transcriber.transcribe(base64_audio)
     if transcription:
-        print(f"Transcription: {transcription}")
+        logger.info("Successfully transcribed audio")
         context_buffer.add_to_context(transcription)
         
         # Update progress bar
@@ -281,9 +342,10 @@ async def on_audio_ready(e):
             ui.label(transcription).classes('animate-fade-out')
             
         if context_buffer.is_full_enough():
+            logger.info("Context buffer full, generating image")
             image_prompt = await context_buffer.generate_image_prompt()
             if image_prompt:
-                print(f"Generated image prompt: {image_prompt}")  # Debug print
+                logger.debug(f"Generated image prompt: {image_prompt}")
                 await update_image(interactive_image, image_prompt)
                 context_buffer.clear()
                 # Reset progress bar after clearing context
@@ -293,6 +355,8 @@ async def on_audio_ready(e):
 @ui.page("/")
 async def main():
     global interactive_image, transcription_display, progress_bar, progress_label, context_buffer
+    logger = logging.getLogger('discussion_show.ui')
+    logger.info("Initializing main UI page")
     
     with ui.column().classes('w-full items-center'):
         ui.label("AI Discussion Visualizer").classes('text-2xl mb-4')
@@ -311,6 +375,8 @@ async def main():
         
         # Image display
         interactive_image = ui.interactive_image().classes('w-full max-w-2xl')
+    
+    logger.info("Main UI page initialized")
 
     ui.add_head_html('''
     <style>
@@ -325,13 +391,18 @@ async def main():
     ''')
 
 def startup():
+    logger = logging.getLogger('discussion_show.startup')
+    logger.info("Application starting up")
     loop = asyncio.get_running_loop()
     loop.set_debug(True)
     loop.slow_callback_duration = 0.05
+    logger.info("Event loop configured")
 
 app.on_startup(startup)
 
 # Configure static file serving
 app.add_static_files("/static", STATIC_DIR)
 
-ui.run(port=8080)
+if __name__ in {"__main__", "__mp_main__"}:  # Modified to support multiprocessing
+    logger.info("Starting Discussion Show application")
+    ui.run(port=8080)
