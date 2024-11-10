@@ -22,7 +22,8 @@ class ImageGenerator:
         def _generate():
             try:
                 # Truncate prompt to avoid token limit issues
-                truncated_prompt = self.truncate_prompt(context)
+                # truncated_prompt = self.truncate_prompt(context)
+                truncated_prompt = context
                 self.logger.debug(f"Using truncated prompt: {truncated_prompt}")
 
                 # Run SDXL with the truncated prompt
