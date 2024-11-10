@@ -14,6 +14,9 @@ import asyncio
 import logging
 import sys
 from datetime import datetime
+import webrtcvad
+import wave
+import array
 
 # Configure logging
 def setup_logger():
@@ -78,6 +81,38 @@ class AudioTranscriber:
     def __init__(self):
         self.openai = OpenAI(api_key=OPENAI_API_KEY)
         self.logger = logging.getLogger('discussion_show.transcriber')
+        self.vad = webrtcvad.Vad(3)  # Aggressiveness mode 3 (highest)
+
+    def check_voice_activity(self, wav_path):
+        """Check if the WAV file contains voice activity."""
+        with wave.open(wav_path, 'rb') as wf:
+            # WebRTC VAD only accepts 16-bit mono PCM audio
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                return False
+            
+            # Get raw audio data
+            raw_data = wf.readframes(wf.getnframes())
+            samples = array.array('h', raw_data)
+            
+            # Process in 30ms frames (WebRTC VAD requirement)
+            frame_duration = 30  # ms
+            samples_per_frame = int(wf.getframerate() * frame_duration / 1000)
+            voice_frames = 0
+            total_frames = 0
+            
+            for i in range(0, len(samples), samples_per_frame):
+                frame = samples[i:i + samples_per_frame]
+                if len(frame) == samples_per_frame:
+                    is_speech = self.vad.is_speech(frame.tobytes(), wf.getframerate())
+                    if is_speech:
+                        voice_frames += 1
+                    total_frames += 1
+            
+            if total_frames == 0:
+                return False
+                
+            voice_percentage = (voice_frames / total_frames) * 100
+            return voice_percentage > 10  # Consider it speech if more than 10% contains voice
 
     async def transcribe(self, audio_blob_base64):
         def _process_audio():
@@ -96,6 +131,23 @@ class AudioTranscriber:
                     # Convert WebM to WAV using pydub
                     audio = AudioSegment.from_file(temp_webm.name, format="webm")
                     self.logger.debug("Successfully converted WebM to AudioSegment")
+                    
+                    # Save as WAV for VAD check
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                        audio.export(temp_wav.name, format='wav', parameters=[
+                            "-acodec", "pcm_s16le",  # 16-bit PCM
+                            "-ac", "1",              # mono
+                            "-ar", "16000"           # 16kHz sample rate
+                        ])
+                        
+                        # Check for voice activity
+                        if not self.check_voice_activity(temp_wav.name):
+                            self.logger.info("No significant voice activity detected")
+                            os.unlink(temp_wav.name)
+                            os.unlink(temp_webm.name)
+                            return None
+                        
+                        os.unlink(temp_wav.name)
                     
                     # Export as OGG for Whisper API
                     with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
