@@ -73,8 +73,8 @@ RUNPOD_ENDPOINT_ID=os.getenv("RUNPOD_ENDPOINT_ID")
 RUNPOD_WHISPER_ENDPOINT_ID=os.getenv("RUNPOD_WHISPER_ENDPOINT_ID")
 RUNPOD_SDXL_ENDPOINT_ID=os.getenv("RUNPOD_SDXL_ENDPOINT_ID")
 WHISPER_PROVIDER=os.getenv("WHISPER_PROVIDER", "openai")  # Default to OpenAI if not set
-# FULL_ENOUGH=500 # 2000 is also a good value
-FULL_ENOUGH=1000
+FULL_ENOUGH=500 # 2000 is also a good value
+# FULL_ENOUGH=1000
 
 # Get the absolute path for the images directory
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -300,6 +300,9 @@ class MyContextBuffer:
             self.logger.info("Generating image prompt from context")
             context = self.context
             self.clear()
+            # Reset progress bar after clearing context
+            progress_bar.set_value(0)
+            progress_label.set_text("Context Buffer: 0%")
             response = self.openai.chat.completions.create(
                 model=RUNPOD_MODEL_NAME,
                 messages=[
@@ -352,17 +355,24 @@ async def update_image(interactive_image, prompt):
     
     ig = ImageGenerator(endpoint_id=RUNPOD_SDXL_ENDPOINT_ID)
     logger.info("Generating new image")
+    image_generation_status.set_text("Generating image...")
     base64_image = await ig.generate_image(prompt)
     
     if base64_image:
         logger.info("Saving generated image")
+        image_generation_status.set_text("Saving image...")
         image_url = await save_base64_image(base64_image)
         logger.debug(f"Image saved at: {image_url}")
         await asyncio.sleep(0.5)
         interactive_image.set_source(image_url)
         logger.info("Successfully updated image in UI")
+        image_generation_status.set_text("Not generating image")
     else:
         logger.error("Failed to generate image")
+        image_generation_status.set_text("Failed to generate image")
+    
+    image_prompt_display.clear()
+
 
 # Global variables for UI elements
 context_buffer = MyContextBuffer()
@@ -371,6 +381,8 @@ transcription_display = None
 progress_bar = None
 progress_label = None
 audio_recorder = None
+image_prompt_display = None
+image_generation_status = None
 
 async def handle_recording_toggle(e):
     logger = logging.getLogger('discussion_show.recording_toggle')
@@ -410,17 +422,16 @@ async def on_audio_ready(e):
         if context_buffer.is_full_enough():
             logger.info("Context buffer full, generating image")
             image_prompt = await context_buffer.generate_image_prompt()
-            # context_buffer.clear()
             if image_prompt:
                 logger.debug(f"Generated image prompt: {image_prompt}")
+                with image_prompt_display:
+                    ui.label(image_prompt)
                 await update_image(interactive_image, image_prompt)
-                # Reset progress bar after clearing context
-                progress_bar.set_value(0)
-                progress_label.set_text("Context Buffer: 0%")
+
 
 @ui.page("/")
 async def main():
-    global interactive_image, transcription_display, progress_bar, progress_label, context_buffer, audio_recorder
+    global interactive_image, transcription_display, progress_bar, progress_label, context_buffer, audio_recorder, image_prompt_display, image_generation_status
     logger = logging.getLogger('discussion_show.ui')
     logger.info("Initializing main UI page")
     
@@ -442,6 +453,10 @@ async def main():
         
         # Transcription display area with fade-out animation
         transcription_display = ui.column().classes('w-full max-w-2xl mb-4 min-h-[100px] p-4 bg-gray-100 rounded')
+
+        image_prompt_display = ui.column().classes('w-full max-w-2xl mb-4 p-4 bg-gray-100 rounded')
+
+        image_generation_status = ui.label("Not generating image").classes('text-sm mb-4')
         
         # Image display
         interactive_image = ui.interactive_image().classes('w-full max-w-2xl')

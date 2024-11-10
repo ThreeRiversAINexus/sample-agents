@@ -69,7 +69,7 @@ class RunPodAPI:
             self.logger.error(f"Failed to check status: {str(e)}")
             return None
 
-    def get_result(self, job_id: str, max_retries: int = 30, retry_delay: int = 2) -> Optional[Dict]:
+    def get_result(self, job_id: str, max_retries: int = 60, retry_delay: int = 2) -> Optional[Dict]:
         """Get the result of a job with retries."""
         retries = 0
         while retries < max_retries:
@@ -98,28 +98,14 @@ class RunPodAPI:
     def run_sdxl(self, prompt: str, **kwargs) -> Optional[Dict]:
         """Run Stable Diffusion XL with default parameters."""
         default_params = {
-            "prompt": prompt,
-            "negative_prompt": "blurry, bad quality, distorted",
-            "num_inference_steps": 20,
+            "prompt": prompt
+            # "num_inference_steps": 25,
+            # "refiner_inference_steps": 50,
+            # "width": 512,
+            # "height": 512,
             # "guidance_scale": 7.5,
-            "width": 512,
-            "height": 512,
-            # "seed": int(time.time()),
-            "num_images": 1
-            # "scheduler": "DPMSolverMultistep",
-            # "safety_checker": False,
-            # "enhance_prompt": False,
-            # "multi_lingual": False,
-            # "panorama": False,
-            # "self_attention": False,
-            # "upscale": False,
-            # "embeddings_model": None,
-            # "lora_model": None,
-            # "tomesd": True,
-            # "clip_skip": 2
-            # "use_karras_sigmas": False,
-            # "vae": None,
-            # "use_fp16": True
+            # "strength": 0.3,
+            # "num_images": 1
         }
         
         # Update defaults with any provided kwargs
