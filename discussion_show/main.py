@@ -1,6 +1,6 @@
 from nicegui import ui, run, app
 from nicegui.element import Element
-from ds.runpod_api import RunPodAPI
+from ds.image_generator import ImageGenerator  # Updated import
 from dotenv import load_dotenv
 from typing import Callable, Optional
 from openai import OpenAI
@@ -21,7 +21,7 @@ import array
 # Configure logging
 def setup_logger():
     logger = logging.getLogger('discussion_show')
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     
     # Create formatters
     detailed_formatter = logging.Formatter(
@@ -229,108 +229,6 @@ class MyContextBuffer:
         self.context = ""
         self.logger.debug("Context buffer cleared")
 
-class ImageGenerator:
-    def __init__(self, endpoint_id=None):
-        if endpoint_id is None:
-            self.endpoint_id = os.environ.get("RUNPOD_ENDPOINT")
-        else:
-            self.endpoint_id = endpoint_id
-        self.api_key = os.environ.get("RUNPOD_API_KEY")
-        self.logger = logging.getLogger('discussion_show.image_generator')
-
-    def truncate_prompt(self, prompt, max_words=30):
-        """Truncate prompt to avoid CLIP token limit issues."""
-        words = prompt.split()
-        if len(words) > max_words:
-            self.logger.info(f"Truncating prompt from {len(words)} to {max_words} words")
-            return ' '.join(words[:max_words])
-        return prompt
-
-    async def generate_image(self, context):
-        def _start_job():
-            self.logger.info("Starting RunPod image generation job")
-            url = f"https://api.runpod.ai/v2/{self.endpoint_id}/run"
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {self.api_key}'
-            }
-
-            # Truncate prompt to avoid token limit issues
-            truncated_prompt = self.truncate_prompt(context)
-            self.logger.debug(f"Using truncated prompt: {truncated_prompt}")
-
-            data = {
-                "input": {
-                    "prompt": truncated_prompt,
-                    "negative_prompt": "blurry, bad quality, distorted",
-                    "num_inference_steps": int(30),
-                    "guidance_scale": float(7.5),
-                    "width": int(1024),
-                    "height": int(1024),
-                    "seed": int(time.time()),
-                    "num_images": int(1),
-                    "scheduler": "DDIM",
-                    "use_fp16": True,               # Enable half-precision
-                    "clip_skip": int(2),            # Add clip skip parameter
-                    "prompt_strength": float(0.8),  # Add prompt strength
-                    "torch_dtype": "float16",       # Explicitly set dtype
-                    "output_format": "png"
-                }
-            }
-            import requests
-            response = requests.post(url, headers=headers, json=data)
-            result = response.json()
-            self.logger.debug(f"RunPod job start response: {result}")
-            return result
-
-        def _check_status(job_id):
-            url = f"https://api.runpod.ai/v2/{self.endpoint_id}/status/{job_id}"
-            headers = {
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {self.api_key}'
-            }
-            import requests
-            response = requests.get(url, headers=headers)
-            result = response.json()
-            self.logger.debug(f"RunPod job status: {result.get('status')}")
-            return result
-
-        start_response = await run.io_bound(_start_job)
-        job_status_id = start_response.get("id")
-
-        if not job_status_id:
-            self.logger.error("Failed to start RunPod job")
-            return None
-
-        while True:
-            status_response = await run.io_bound(lambda: _check_status(job_status_id))
-            if status_response.get("status") in ["COMPLETED", "FAILED", "CANCELLED"]:
-                break
-            await asyncio.sleep(1)
-
-        if status_response.get("status") == "COMPLETED":
-            try:
-                output = status_response.get("output", {})
-                if isinstance(output, list) and output:
-                    base64_image = output[0]
-                elif isinstance(output, dict):
-                    base64_image = output.get("image") or output.get("image_url")
-                else:
-                    base64_image = output
-                
-                if base64_image:
-                    self.logger.info("Successfully generated image")
-                    return base64_image
-                else:
-                    self.logger.error(f"No image in output: {output}")
-                    return None
-            except (KeyError, TypeError) as e:
-                self.logger.error(f"Error extracting image: {str(e)}", exc_info=True)
-                return None
-        else:
-            self.logger.error(f"Job failed with status: {status_response.get('status')}")
-            return None
-
 async def save_base64_image(base64_data):
     logger = logging.getLogger('discussion_show.image_saver')
     
@@ -469,7 +367,7 @@ async def main():
         to { opacity: 0; }
     }
     .animate-fade-out {
-        animation: fadeOut 5s forwards;
+        animation: fadeOut 15s forwards;
     }
     </style>
     ''')

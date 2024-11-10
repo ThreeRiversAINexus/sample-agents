@@ -11,17 +11,17 @@
 </template>
 
 <script>
-const CHUNK_SIZE_LIMIT = 0.25 * 1024 * 1024; // 256KB
-
 export default {
   data() {
     return {
+      CHUNK_SIZE_LIMIT: 0.05 * 1024 * 1024,
       isRecording: false,
       mediaRecorder: null,
       stream: null,
       audioChunks: [],
       currentSize: 0,
-      chunkCount: 0
+      chunkCount: 0,
+      isProcessingChunk: false
     };
   },
   mounted() {
@@ -34,7 +34,9 @@ export default {
         this.stream = await navigator.mediaDevices.getUserMedia({ 
           audio: {
             channelCount: 1,
-            sampleRate: 16000
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true
           } 
         });
         console.log('Microphone permission granted');
@@ -50,15 +52,37 @@ export default {
           await this.requestMicrophonePermission();
         }
 
-        // Only create a new MediaRecorder if we don't have one or it's inactive
         if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
           this.resetRecording();
           
-          console.log('Creating new MediaRecorder...');
-          this.mediaRecorder = new MediaRecorder(this.stream, {
-            mimeType: 'audio/webm;codecs=opus',
+          // Test available MIME types
+          const mimeTypes = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            'audio/ogg'
+          ];
+          
+          let selectedType = null;
+          for (const type of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(type)) {
+              selectedType = type;
+              console.log(`Using MIME type: ${type}`);
+              break;
+            }
+          }
+          
+          if (!selectedType) {
+            throw new Error('No supported MIME type found');
+          }
+
+          const options = {
+            mimeType: selectedType,
             audioBitsPerSecond: 16000
-          });
+          };
+
+          console.log('Creating new MediaRecorder with options:', options);
+          this.mediaRecorder = new MediaRecorder(this.stream, options);
 
           this.mediaRecorder.addEventListener('dataavailable', async (event) => {
             if (event.data.size > 0) {
@@ -66,10 +90,11 @@ export default {
               this.audioChunks.push(event.data);
               this.currentSize += event.data.size;
               
-              console.log(`Current total size: ${this.currentSize} bytes (limit: ${CHUNK_SIZE_LIMIT} bytes)`);
-              if (this.currentSize >= CHUNK_SIZE_LIMIT) {
-                console.log('Size limit reached, emitting chunks...');
-                await this.emitCurrentChunks();
+              console.log(`Current total size: ${this.currentSize} bytes (limit: ${this.CHUNK_SIZE_LIMIT} bytes)`);
+              if (this.currentSize >= this.CHUNK_SIZE_LIMIT && !this.isProcessingChunk) {
+                console.log('Size limit reached, stopping current recording...');
+                this.isProcessingChunk = true;
+                this.mediaRecorder.stop();
               }
             }
           });
@@ -77,15 +102,23 @@ export default {
           this.mediaRecorder.addEventListener('start', () => {
             console.log('MediaRecorder started');
             this.isRecording = true;
+            this.isProcessingChunk = false;
           });
 
           this.mediaRecorder.addEventListener('stop', async () => {
             console.log('MediaRecorder stopped');
             if (this.audioChunks.length > 0) {
-              console.log('Emitting remaining chunks...');
-              await this.emitCurrentChunks();
+              console.log('Processing chunks...');
+              await this.processChunks();
             }
-            this.isRecording = false;
+            
+            // If still recording, start a new recorder
+            if (this.isRecording) {
+              console.log('Starting new recording segment...');
+              this.startRecording();
+            } else {
+              this.isRecording = false;
+            }
           });
 
           this.mediaRecorder.addEventListener('error', (error) => {
@@ -94,7 +127,7 @@ export default {
           });
 
           // Start recording with 1-second chunks
-          console.log('Starting MediaRecorder with 1-second chunks...');
+          console.log('Starting MediaRecorder...');
           this.mediaRecorder.start(1000);
         } else {
           console.warn('MediaRecorder is in state:', this.mediaRecorder.state);
@@ -106,10 +139,9 @@ export default {
     },
     async stopRecording() {
       console.log('Stopping recording...');
+      this.isRecording = false;
       if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
         this.mediaRecorder.stop();
-      } else {
-        console.warn('MediaRecorder is not in recording state:', this.mediaRecorder?.state);
       }
     },
     resetRecording() {
@@ -117,18 +149,19 @@ export default {
       this.audioChunks = [];
       this.currentSize = 0;
       this.chunkCount = 0;
+      this.isProcessingChunk = false;
     },
-    async emitCurrentChunks() {
+    async processChunks() {
       if (this.audioChunks.length === 0) {
-        console.log('No chunks to emit');
+        console.log('No chunks to process');
         return;
       }
 
       console.log(`Creating blob from ${this.audioChunks.length} chunks...`);
       const blob = new Blob(this.audioChunks, { 
-        type: 'audio/webm;codecs=opus' 
+        type: this.mediaRecorder.mimeType 
       });
-      console.log(`Blob created, size: ${blob.size} bytes`);
+      console.log(`Blob created, size: ${blob.size} bytes, type: ${blob.type}`);
       
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -137,20 +170,13 @@ export default {
           console.log('Emitting audio_ready event...');
           this.$emit('audio_ready', { 
             audioBlobBase64: base64Data,
-            mimeType: 'audio/webm;codecs=opus'
+            mimeType: this.mediaRecorder.mimeType
           });
           resolve();
         };
         reader.readAsDataURL(blob);
       }).finally(() => {
-        // Reset for next chunk only after emitting
         this.resetRecording();
-        
-        // If still recording and in inactive state, restart
-        if (this.isRecording && (!this.mediaRecorder || this.mediaRecorder.state === 'inactive')) {
-          console.log('Restarting MediaRecorder for next chunk...');
-          this.startRecording();
-        }
       });
     }
   }
@@ -167,7 +193,6 @@ export default {
   gap: 0.5rem;
 }
 
-/* Recording indicator styles */
 .recording-indicator {
   display: flex;
   align-items: center;
