@@ -14,7 +14,7 @@
 export default {
   data() {
     return {
-      CHUNK_SIZE_LIMIT: 0.05 * 1024 * 1024,
+      CHUNK_SIZE_LIMIT: 0.01 * 1024 * 1024,
       isRecording: false,
       mediaRecorder: null,
       stream: null,
