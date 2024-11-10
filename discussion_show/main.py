@@ -186,7 +186,7 @@ class AudioTranscriber:
 class MyContextBuffer:
     def __init__(self):
         self.context = ""
-        self.full_enough = 50
+        self.full_enough = 1000 
         self.openai = OpenAI(api_key=OPENAI_API_KEY)
         self.logger = logging.getLogger('discussion_show.context_buffer')
 
@@ -215,8 +215,8 @@ class MyContextBuffer:
             response = self.openai.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions."},
-                    {"role": "user", "content": f"Generate a short, focused image prompt based on this conversation excerpt: {self.context}"}
+                    {"role": "system", "content": "You are a creative assistant that generates concise image prompts based on conversations. Focus on the key themes and emotions. Create realistic and accurate art."},
+                    {"role": "user", "content": f"Generate an image prompt based on this conversation excerpt: {self.context}"}
                 ]
             )
             prompt = response.choices[0].message.content
