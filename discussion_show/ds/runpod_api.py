@@ -98,11 +98,11 @@ class RunPodAPI:
     def run_sdxl(self, prompt: str, **kwargs) -> Optional[Dict]:
         """Run Stable Diffusion XL with default parameters."""
         default_params = {
-            "prompt": prompt
+            "prompt": prompt,
             # "num_inference_steps": 25,
             # "refiner_inference_steps": 50,
-            # "width": 512,
-            # "height": 512,
+            "width": 512,
+            "height": 512,
             # "guidance_scale": 7.5,
             # "strength": 0.3,
             # "num_images": 1
