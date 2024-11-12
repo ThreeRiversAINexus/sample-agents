@@ -22,10 +22,14 @@ This was an experiment with generative UI that I completed. You can talk to this
 
 This app seeks out events that a user might like, which is the basis of my https://letsdo.agency app I've created; however, this is the baby version.
 
+### discussion_show
+
+This is an art show piece where we listen with whisper to conversations until we meet a certain threshold of context length. Then the AI generates images based on the current discussion. This is designed with NiceGUI and attempts to be compatible with PC and iOS devices.
+
+### incomplete - rag/yags_master
+
+This is an attempt to create a retrieval-augmented generation agent that assists with running gameplay for the open source role playing game "YAGS".
+
 ### incomplete - meta_prompting
 
 This is supposed to be a basic tool for refining prompts by having the LLM critique and rewrite its own prompt.
-
-### incomplete - discussion_show
-
-This was supposed to be an art show piece where we'd listen with whisper to conversations until we meet a certain threshold of context length. Then the AI would generate images based on the current discussion. It would be based on the number of tokens coming in from the discussion around it. Some users wanted to save the images.
