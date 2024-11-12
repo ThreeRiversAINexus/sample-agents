@@ -4,3 +4,4 @@ event_searcher/.env
 .devcontainer/
 .github/
 discussion_show/static/images/*
+**/__pycache__/*
