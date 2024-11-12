@@ -122,26 +122,53 @@ class AudioTranscriber:
             voice_percentage = (voice_frames / total_frames) * 100
             return voice_percentage > 10
 
+    def _extract_mime_and_data(self, audio_blob_base64):
+        """Extract MIME type and actual base64 data from the input."""
+        mime_type = "audio/webm"  # default
+        base64_data = audio_blob_base64
+        
+        if "data:" in audio_blob_base64:
+            parts = audio_blob_base64.split(",", 1)
+            if len(parts) == 2:
+                mime_type = parts[0].split(":")[1].split(";")[0]
+                base64_data = parts[1]
+        
+        return mime_type, base64_data
+
     async def transcribe_with_openai(self, audio_blob_base64):
         """Transcribe audio using OpenAI's Whisper API"""
         try:
             self.logger.info("Starting OpenAI audio transcription process")
+            
+            # Extract MIME type and actual base64 data
+            mime_type, base64_data = self._extract_mime_and_data(audio_blob_base64)
+            self.logger.debug(f"Detected MIME type: {mime_type}")
+            
             # Decode base64 to binary
-            audio_data = base64.b64decode(audio_blob_base64)
+            audio_data = base64.b64decode(base64_data)
             self.logger.debug("Successfully decoded base64 audio data")
             
-            # Save the WebM audio data to a temporary file
-            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
-                temp_webm.write(audio_data)
-                temp_webm.flush()
-                self.logger.debug(f"Saved temporary WebM file: {temp_webm.name}")
-                
-                # Convert WebM to WAV using pydub
-                audio = AudioSegment.from_file(temp_webm.name, format="webm")
-                self.logger.debug("Successfully converted WebM to AudioSegment")
-                
-                # Save as WAV for VAD check
+            # Save the audio data to a temporary file with appropriate extension
+            with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
+                # Convert to WAV first for consistency
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                    # Write the audio data to a temporary file
+                    with tempfile.NamedTemporaryFile(delete=False) as temp_audio:
+                        temp_audio.write(audio_data)
+                        temp_audio.flush()
+                        
+                        # Convert to AudioSegment using the detected format
+                        format_name = mime_type.split('/')[-1].split(';')[0]
+                        try:
+                            audio = AudioSegment.from_file(temp_audio.name, format=format_name)
+                        except:
+                            # Fallback to default format if detection fails
+                            self.logger.warning(f"Failed to load as {format_name}, trying default format")
+                            audio = AudioSegment.from_file(temp_audio.name)
+                        
+                        os.unlink(temp_audio.name)
+                    
+                    # Export as WAV for voice activity detection
                     audio.export(temp_wav.name, format='wav', parameters=[
                         "-acodec", "pcm_s16le",
                         "-ac", "1",
@@ -151,36 +178,31 @@ class AudioTranscriber:
                     if not self.check_voice_activity(temp_wav.name):
                         self.logger.info("No significant voice activity detected")
                         os.unlink(temp_wav.name)
-                        os.unlink(temp_webm.name)
                         return None
                     
                     os.unlink(temp_wav.name)
                 
                 # Export as OGG for Whisper API
-                with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
-                    audio.export(temp_ogg.name, format='ogg', parameters=["-q:a", "4"])
-                    
-                    file_size = os.path.getsize(temp_ogg.name)
-                    if file_size > 25 * 1024 * 1024:
-                        self.logger.error("Audio file too large (>25MB)")
-                        os.unlink(temp_ogg.name)
-                        os.unlink(temp_webm.name)
-                        raise ValueError("Audio file too large (>25MB)")
-                    
-                    self.logger.info("Sending audio to OpenAI Whisper API")
-                    with open(temp_ogg.name, 'rb') as audio_file:
-                        transcript = self.openai.audio.transcriptions.create(
-                            model="whisper-1",
-                            file=audio_file
-                        )
-                    
-                    # Clean up temp files
+                audio.export(temp_ogg.name, format='ogg', parameters=["-q:a", "4"])
+                
+                file_size = os.path.getsize(temp_ogg.name)
+                if file_size > 25 * 1024 * 1024:
+                    self.logger.error("Audio file too large (>25MB)")
                     os.unlink(temp_ogg.name)
-                    os.unlink(temp_webm.name)
-                    self.logger.debug("Cleaned up temporary files")
-                    
-                    self.logger.info("Successfully transcribed audio")
-                    return transcript.text
+                    raise ValueError("Audio file too large (>25MB)")
+                
+                self.logger.info("Sending audio to OpenAI Whisper API")
+                with open(temp_ogg.name, 'rb') as audio_file:
+                    transcript = self.openai.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file
+                    )
+                
+                # Clean up temp files
+                os.unlink(temp_ogg.name)
+                
+                self.logger.info("Successfully transcribed audio")
+                return transcript.text
                 
         except Exception as e:
             self.logger.error(f"Error in OpenAI transcription: {str(e)}", exc_info=True)
@@ -191,28 +213,42 @@ class AudioTranscriber:
         try:
             self.logger.info("Starting RunPod audio transcription process")
             
-            # Check for voice activity using WAV conversion first
-            audio_data = base64.b64decode(audio_blob_base64)
-            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_webm:
-                temp_webm.write(audio_data)
-                temp_webm.flush()
+            # Extract MIME type and actual base64 data
+            mime_type, base64_data = self._extract_mime_and_data(audio_blob_base64)
+            self.logger.debug(f"Detected MIME type: {mime_type}")
+            
+            # Check for voice activity
+            audio_data = base64.b64decode(base64_data)
+            
+            # Save to temporary file and check for voice activity
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                with tempfile.NamedTemporaryFile(delete=False) as temp_audio:
+                    temp_audio.write(audio_data)
+                    temp_audio.flush()
+                    
+                    # Convert to AudioSegment using the detected format
+                    format_name = mime_type.split('/')[-1].split(';')[0]
+                    try:
+                        audio = AudioSegment.from_file(temp_audio.name, format=format_name)
+                    except:
+                        # Fallback to default format if detection fails
+                        self.logger.warning(f"Failed to load as {format_name}, trying default format")
+                        audio = AudioSegment.from_file(temp_audio.name)
+                    
+                    os.unlink(temp_audio.name)
                 
-                audio = AudioSegment.from_file(temp_webm.name, format="webm")
-                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-                    audio.export(temp_wav.name, format='wav', parameters=[
-                        "-acodec", "pcm_s16le",
-                        "-ac", "1",
-                        "-ar", "16000"
-                    ])
-                    
-                    if not self.check_voice_activity(temp_wav.name):
-                        self.logger.info("No significant voice activity detected")
-                        os.unlink(temp_wav.name)
-                        os.unlink(temp_webm.name)
-                        return None
-                    
+                audio.export(temp_wav.name, format='wav', parameters=[
+                    "-acodec", "pcm_s16le",
+                    "-ac", "1",
+                    "-ar", "16000"
+                ])
+                
+                if not self.check_voice_activity(temp_wav.name):
+                    self.logger.info("No significant voice activity detected")
                     os.unlink(temp_wav.name)
-                os.unlink(temp_webm.name)
+                    return None
+                
+                os.unlink(temp_wav.name)
 
             # Send base64 audio directly to RunPod
             headers = {
@@ -222,7 +258,7 @@ class AudioTranscriber:
             
             payload = {
                 "input": {
-                    "audio_base64": audio_blob_base64,
+                    "audio_base64": base64_data,
                     "model": "base",
                     "transcription": "plain_text",
                     "translate": False,
@@ -397,9 +433,15 @@ async def on_audio_ready(e):
     logger = logging.getLogger('discussion_show.audio_handler')
     
     base64_audio = e.args['audioBlobBase64']
+    mime_type = e.args.get('mimeType', 'audio/webm')
+    
     if not base64_audio:
         logger.warning("No audio data received")
         return
+    
+    # Ensure the base64 data includes the MIME type
+    if not base64_audio.startswith('data:'):
+        base64_audio = f'data:{mime_type};base64,{base64_audio}'
     
     logger.info("Audio data received, starting transcription")
     transcriber = AudioTranscriber()
@@ -434,6 +476,8 @@ async def main():
     global interactive_image, transcription_display, progress_bar, progress_label, context_buffer, audio_recorder, image_prompt_display, image_generation_status
     logger = logging.getLogger('discussion_show.ui')
     logger.info("Initializing main UI page")
+    # Great for debugging on iOS
+    # ui.add_head_html('<script src="https://cdn.jsdelivr.net/gh/c-kick/mobileConsole/hnl.mobileconsole.min.js"></script>')
     
     with ui.column().classes('w-full items-center'):
         ui.label("AI Discussion Visualizer").classes('text-2xl mb-4')
@@ -479,8 +523,9 @@ def startup():
     logger = logging.getLogger('discussion_show.startup')
     logger.info("Application starting up")
     loop = asyncio.get_running_loop()
-    loop.set_debug(True)
-    loop.slow_callback_duration = 0.05
+    # These are used for debugging slow async/multiproc
+    # loop.set_debug(True)
+    # loop.slow_callback_duration = 0.05
     logger.info("Event loop configured")
 
 app.on_startup(startup)
@@ -490,4 +535,6 @@ app.add_static_files("/static", STATIC_DIR)
 
 if __name__ in {"__main__", "__mp_main__"}:  # Modified to support multiprocessing
     logger.info("Starting Discussion Show application")
-    ui.run(port=8080)
+    # Similar to ngrok
+    ON_AIR=False
+    ui.run(port=8080, on_air=ON_AIR)
