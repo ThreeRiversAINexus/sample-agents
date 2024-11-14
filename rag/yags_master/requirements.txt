@@ -1,0 +1,5 @@
+llama-index
+dspy
+chromadb
+nicegui
+python-dotenv
