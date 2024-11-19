@@ -5,3 +5,4 @@ event_searcher/.env
 .github/
 discussion_show/static/images/*
 **/__pycache__/*
+discussion_show/logs
