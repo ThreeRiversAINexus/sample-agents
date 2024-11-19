@@ -86,7 +86,6 @@ class AudioTranscriber:
     def __init__(self):
         self.provider = WHISPER_PROVIDER
         self.logger = logging.getLogger('discussion_show.transcriber')
-        self.vad = webrtcvad.Vad(3)  # Aggressiveness mode 3 (highest)
         
         if self.provider == "openai":
             self.openai = OpenAI(api_key=OPENAI_API_KEY)
@@ -94,7 +93,8 @@ class AudioTranscriber:
             self.endpoint_id = RUNPOD_WHISPER_ENDPOINT_ID
             self.api_key = RUNPOD_API_KEY
 
-    def check_voice_activity(self, wav_path):
+    @staticmethod
+    def check_voice_activity(wav_path):
         """Check if the WAV file contains voice activity."""
         with wave.open(wav_path, 'rb') as wf:
             if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
@@ -111,7 +111,8 @@ class AudioTranscriber:
             for i in range(0, len(samples), samples_per_frame):
                 frame = samples[i:i + samples_per_frame]
                 if len(frame) == samples_per_frame:
-                    is_speech = self.vad.is_speech(frame.tobytes(), wf.getframerate())
+                    vad = webrtcvad.Vad(3)  # Aggressiveness mode 3 (highest)
+                    is_speech = vad.is_speech(frame.tobytes(), wf.getframerate())
                     if is_speech:
                         voice_frames += 1
                     total_frames += 1
@@ -122,7 +123,8 @@ class AudioTranscriber:
             voice_percentage = (voice_frames / total_frames) * 100
             return voice_percentage > 10
 
-    def _extract_mime_and_data(self, audio_blob_base64):
+    @staticmethod
+    def _extract_mime_and_data(audio_blob_base64):
         """Extract MIME type and actual base64 data from the input."""
         mime_type = "audio/webm"  # default
         base64_data = audio_blob_base64
@@ -135,18 +137,19 @@ class AudioTranscriber:
         
         return mime_type, base64_data
 
-    async def transcribe_with_openai(self, audio_blob_base64):
+    def transcribe_with_openai(audio_blob_base64):
+        logger = logging.getLogger('discussion_show.transcribe_with_openai')
         """Transcribe audio using OpenAI's Whisper API"""
         try:
-            self.logger.info("Starting OpenAI audio transcription process")
+            logger.info("Starting OpenAI audio transcription process")
             
             # Extract MIME type and actual base64 data
-            mime_type, base64_data = self._extract_mime_and_data(audio_blob_base64)
-            self.logger.debug(f"Detected MIME type: {mime_type}")
+            mime_type, base64_data = AudioTranscriber._extract_mime_and_data(audio_blob_base64)
+            logger.debug(f"Detected MIME type: {mime_type}")
             
             # Decode base64 to binary
             audio_data = base64.b64decode(base64_data)
-            self.logger.debug("Successfully decoded base64 audio data")
+            logger.debug("Successfully decoded base64 audio data")
             
             # Save the audio data to a temporary file with appropriate extension
             with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_ogg:
@@ -163,7 +166,7 @@ class AudioTranscriber:
                             audio = AudioSegment.from_file(temp_audio.name, format=format_name)
                         except:
                             # Fallback to default format if detection fails
-                            self.logger.warning(f"Failed to load as {format_name}, trying default format")
+                            logger.warning(f"Failed to load as {format_name}, trying default format")
                             audio = AudioSegment.from_file(temp_audio.name)
                         
                         os.unlink(temp_audio.name)
@@ -175,8 +178,8 @@ class AudioTranscriber:
                         "-ar", "16000"
                     ])
                     
-                    if not self.check_voice_activity(temp_wav.name):
-                        self.logger.info("No significant voice activity detected")
+                    if not AudioTranscriber.check_voice_activity(temp_wav.name):
+                        logger.info("No significant voice activity detected")
                         os.unlink(temp_wav.name)
                         return None
                     
@@ -187,13 +190,14 @@ class AudioTranscriber:
                 
                 file_size = os.path.getsize(temp_ogg.name)
                 if file_size > 25 * 1024 * 1024:
-                    self.logger.error("Audio file too large (>25MB)")
+                    logger.error("Audio file too large (>25MB)")
                     os.unlink(temp_ogg.name)
                     raise ValueError("Audio file too large (>25MB)")
                 
-                self.logger.info("Sending audio to OpenAI Whisper API")
+                logger.info("Sending audio to OpenAI Whisper API")
                 with open(temp_ogg.name, 'rb') as audio_file:
-                    transcript = self.openai.audio.transcriptions.create(
+                    openai = OpenAI(api_key=OPENAI_API_KEY)
+                    transcript = openai.audio.transcriptions.create(
                         model="whisper-1",
                         file=audio_file
                     )
@@ -201,21 +205,22 @@ class AudioTranscriber:
                 # Clean up temp files
                 os.unlink(temp_ogg.name)
                 
-                self.logger.info("Successfully transcribed audio")
+                logger.info("Successfully transcribed audio")
                 return transcript.text
                 
         except Exception as e:
-            self.logger.error(f"Error in OpenAI transcription: {str(e)}", exc_info=True)
+            logger.error(f"Error in OpenAI transcription: {str(e)}", exc_info=True)
             return None
 
-    async def transcribe_with_runpod(self, audio_blob_base64):
+    def transcribe_with_runpod(audio_blob_base64):
+        logger = logging.getLogger('discussion_show.transcribe_with_runpod')
         """Transcribe audio using RunPod's Whisper endpoint"""
         try:
-            self.logger.info("Starting RunPod audio transcription process")
+            logger.info("Starting RunPod audio transcription process")
             
             # Extract MIME type and actual base64 data
-            mime_type, base64_data = self._extract_mime_and_data(audio_blob_base64)
-            self.logger.debug(f"Detected MIME type: {mime_type}")
+            mime_type, base64_data = AudioTranscriber._extract_mime_and_data(audio_blob_base64)
+            logger.debug(f"Detected MIME type: {mime_type}")
             
             # Check for voice activity
             audio_data = base64.b64decode(base64_data)
@@ -232,7 +237,7 @@ class AudioTranscriber:
                         audio = AudioSegment.from_file(temp_audio.name, format=format_name)
                     except:
                         # Fallback to default format if detection fails
-                        self.logger.warning(f"Failed to load as {format_name}, trying default format")
+                        logger.warning(f"Failed to load as {format_name}, trying default format")
                         audio = AudioSegment.from_file(temp_audio.name)
                     
                     os.unlink(temp_audio.name)
@@ -243,16 +248,17 @@ class AudioTranscriber:
                     "-ar", "16000"
                 ])
                 
-                if not self.check_voice_activity(temp_wav.name):
-                    self.logger.info("No significant voice activity detected")
+                if not AudioTranscriber.check_voice_activity(temp_wav.name):
+                    logger.info("No significant voice activity detected")
                     os.unlink(temp_wav.name)
                     return None
                 
                 os.unlink(temp_wav.name)
 
             # Send base64 audio directly to RunPod
+            api_key = RUNPOD_API_KEY
             headers = {
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
             
@@ -270,8 +276,9 @@ class AudioTranscriber:
                 }
             }
             
-            url = f"https://api.runpod.ai/v2/{self.endpoint_id}/runsync"
-            self.logger.info("Sending audio to RunPod Whisper API")
+            endpoint_id = RUNPOD_WHISPER_ENDPOINT_ID
+            url = f"https://api.runpod.ai/v2/{endpoint_id}/runsync"
+            logger.info("Sending audio to RunPod Whisper API")
             
             response = requests.post(url, headers=headers, json=payload)
             response.raise_for_status()
@@ -280,22 +287,29 @@ class AudioTranscriber:
             if result and "output" in result:
                 transcript = result["output"].get("transcription")
                 if transcript:
-                    self.logger.info("Successfully transcribed audio with RunPod")
+                    logger.info("Successfully transcribed audio with RunPod")
                     return transcript
             
-            self.logger.error("No transcript in RunPod response")
+            logger.error("No transcript in RunPod response")
             return None
             
         except Exception as e:
-            self.logger.error(f"Error in RunPod transcription: {str(e)}", exc_info=True)
+            logger.error(f"Error in RunPod transcription: {str(e)}", exc_info=True)
             return None
 
-    async def transcribe(self, audio_blob_base64):
+    @staticmethod
+    def transcribe(provider, audio_blob_base64):
         """Transcribe audio using the configured provider"""
-        if self.provider == "openai":
-            return await self.transcribe_with_openai(audio_blob_base64)
+        if provider == "debug":
+            return """
+                This is a really nice long context that fills the entire buffer. Create a castle in the sky a bright blue cloudy sky with birds flying around and people partying. Make the castle whimsical and made out of marble with medieval aesthetic. Put big flags and banners along the top. Make a draw bridge with crocodiles.
+            """
+        if provider == "openai":
+            return AudioTranscriber.transcribe_with_openai(audio_blob_base64)
         else:  # runpod
-            return await self.transcribe_with_runpod(audio_blob_base64)
+            if RUNPOD_WHISPER_ENDPOINT_ID == None:
+                exit(1)
+            return AudioTranscriber.transcribe_with_runpod(audio_blob_base64)
 
 class MyContextBuffer:
     def __init__(self):
@@ -303,7 +317,6 @@ class MyContextBuffer:
         self.full_enough = FULL_ENOUGH
         self.provider = WHISPER_PROVIDER
         self.logger = logging.getLogger('discussion_show.context_buffer')
-
         if self.provider == "openai":
             self.openai = OpenAI(api_key=OPENAI_API_KEY)
         else:  # runpod
@@ -446,7 +459,9 @@ async def on_audio_ready(e):
     logger.info("Audio data received, starting transcription")
     transcriber = AudioTranscriber()
     
-    transcription = await transcriber.transcribe(base64_audio)
+    my_provider = WHISPER_PROVIDER
+    # my_provider = "debug"
+    transcription = await run.cpu_bound(transcriber.transcribe, my_provider, base64_audio)
     if transcription:
         logger.info("Successfully transcribed audio")
         context_buffer.add_to_context(transcription)
@@ -480,7 +495,7 @@ async def main():
     # ui.add_head_html('<script src="https://cdn.jsdelivr.net/gh/c-kick/mobileConsole/hnl.mobileconsole.min.js"></script>')
     
     with ui.column().classes('w-full items-center'):
-        ui.label("AI Discussion Visualizer").classes('text-2xl mb-4')
+        ui.label("Discussion Show").classes('text-2xl mb-4')
         
         # Audio controls row with switch and recorder
         with ui.row().classes('mb-4 items-center gap-4'):
