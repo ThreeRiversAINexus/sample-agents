@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 
 load_dotenv()
 
+MY_MODEL_IS_OFFLINE = os.getenv("MY_MODEL_IS_OFFLINE")
 MY_MODEL_NAME = os.getenv("MY_MODEL_NAME")
 MY_API_BASE = os.getenv("MY_API_BASE")
 MY_API_KEY = os.getenv("MY_API_KEY")
@@ -16,7 +17,7 @@ MY_API_KEY = os.getenv("MY_API_KEY")
 # LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
 # LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
 
-interpreter.offline = True
+interpreter.offline = MY_MODEL_IS_OFFLINE
 interpreter.llm.model = MY_MODEL_NAME
 interpreter.llm.api_base = MY_API_BASE
 interpreter.llm.api_key = MY_API_KEY
