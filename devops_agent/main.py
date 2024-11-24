@@ -11,16 +11,18 @@ MY_MODEL_IS_OFFLINE = os.getenv("MY_MODEL_IS_OFFLINE")
 MY_MODEL_NAME = os.getenv("MY_MODEL_NAME")
 MY_API_BASE = os.getenv("MY_API_BASE")
 MY_API_KEY = os.getenv("MY_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # LangFuse integration
 # LANGFUSE_HOST = os.getenv("LANGFUSE_HOST")
 # LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
 # LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
 
-interpreter.offline = MY_MODEL_IS_OFFLINE
 interpreter.llm.model = MY_MODEL_NAME
-interpreter.llm.api_base = MY_API_BASE
-interpreter.llm.api_key = MY_API_KEY
+interpreter.offline = MY_MODEL_IS_OFFLINE
+if interpreter.offline and MY_API_KEY and MY_API_BASE:
+    interpreter.llm.api_base = MY_API_BASE
+    interpreter.llm.api_key = MY_API_KEY
 interpreter.auto_run = True
 interpreter.max_budget = 5.0
 interpreter.llm.context_window = 8192
