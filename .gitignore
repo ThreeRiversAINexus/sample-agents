@@ -1,4 +1,4 @@
-.env
+.env*
 event_searcher/.env
 *.pkl
 .devcontainer/
